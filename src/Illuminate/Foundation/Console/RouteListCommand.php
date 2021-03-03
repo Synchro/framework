@@ -180,7 +180,7 @@ class RouteListCommand extends Command
     }
 
     /**
-     * Filter the route by URI and / or name.
+     * Filter the route according to options given.
      *
      * @param  array  $route
      * @return array|void
@@ -190,11 +190,21 @@ class RouteListCommand extends Command
         if (
             ($this->option('name') && ! Str::contains($route['name'], $this->option('name'))) ||
             ($this->option('path') && ! Str::contains($route['uri'], $this->option('path'))) ||
-            ($this->option('method') && ! Str::contains($route['method'], strtoupper($this->option('method')))) ||
-            ($this->option('uri') && ! $route['route']->matches(
-                Request::create($this->option('uri'), $this->option('method') ?: 'GET'))
-            )
+            ($this->option('method') && ! Str::contains($route['method'], strtoupper($this->option('method'))))
         ) {
+            return;
+        }
+        //The domain option behaves differently depending on whether the uri option is also provided
+        if ($this->option('uri')) {
+            if (! $route['route']->matches(
+                Request::create(
+                    ($this->option('domain') ? 'https://' . $this->option('domain') : '') . $this->option('uri'),
+                    $this->option('method') ?: 'GET'
+                )
+            )) {
+                return;
+            }
+        } elseif ($this->option('domain') && ! Str::contains($route['domain'], $this->option('domain'))) {
             return;
         }
 
@@ -265,6 +275,7 @@ class RouteListCommand extends Command
             ['json', null, InputOption::VALUE_NONE, 'Output the route list as JSON'],
             ['method', null, InputOption::VALUE_OPTIONAL, 'Filter the routes by method'],
             ['name', null, InputOption::VALUE_OPTIONAL, 'Filter the routes by name'],
+            ['domain', null, InputOption::VALUE_OPTIONAL, 'Filter the routes by domain'],
             ['path', null, InputOption::VALUE_OPTIONAL, 'Filter the routes by path'],
             ['uri', null, InputOption::VALUE_OPTIONAL, 'Evaluate a URI against routing rules'],
             ['reverse', 'r', InputOption::VALUE_NONE, 'Reverse the ordering of the routes'],
