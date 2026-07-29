@@ -92,6 +92,13 @@ class Factory
     protected $allowedStrayRequestUrls = [];
 
     /**
+     * The SSRF guard used to validate outbound URLs on every request.
+     *
+     * @var SsrfGuard|null
+     */
+    protected $ssrfGuard;
+
+    /**
      * Create a new factory instance.
      *
      * @param  \Illuminate\Contracts\Events\Dispatcher|null  $dispatcher
@@ -176,7 +183,7 @@ class Factory
      * @param  \Psr\Http\Message\StreamInterface|array|string|resource|null  $body
      * @param  int  $status
      * @param  array<string, mixed>  $headers
-     * @return \GuzzleHttp\Psr7\Response
+     * @return \Psr\Http\Message\ResponseInterface
      *
      * @throws \InvalidArgumentException
      */
@@ -441,6 +448,43 @@ class Factory
     }
 
     /**
+     * Set the SSRF guard used to validate outbound URLs on every request
+     * produced by this factory. Pass `null` to disable.
+     *
+     * @param  SsrfGuard|null  $guard
+     * @return $this
+     */
+    public function ssrfGuard(?SsrfGuard $guard): static
+    {
+        $this->ssrfGuard = $guard;
+
+        return $this;
+    }
+
+    /**
+     * Return a PendingRequest with the SSRF guard disabled, allowing
+     * requests to internal/private addresses for this call only.
+     *
+     * @return PendingRequest
+     */
+    public function unsafeRequest(): PendingRequest
+    {
+        return $this->createPendingRequest()->withoutSsrfGuard();
+    }
+
+    /**
+     * Determine if the given URL is safe to send a request to, based on the
+     * factory's configured SSRF guard. Returns true if no guard is set.
+     *
+     * @param  string  $url
+     * @return bool
+     */
+    public function isSafeUrl(string $url): bool
+    {
+        return $this->ssrfGuard?->isSafe($url) ?? true;
+    }
+
+    /**
      * Begin recording request / response pairs.
      *
      * @return $this
@@ -587,7 +631,8 @@ class Factory
             $request
                 ->stub($this->stubCallbacks)
                 ->preventStrayRequests($this->preventStrayRequests)
-                ->allowStrayRequests($this->allowedStrayRequestUrls);
+                ->allowStrayRequests($this->allowedStrayRequestUrls)
+                ->ssrfGuard($this->ssrfGuard);
         });
     }
 

@@ -196,6 +196,20 @@ class PendingRequest
     protected $allowedStrayRequestUrls = [];
 
     /**
+     * The SSRF guard used to validate outbound URLs.
+     *
+     * @var \Illuminate\Http\Client\SsrfGuard|null
+     */
+    protected $ssrfGuard;
+
+    /**
+     * Whether the SSRF guard should be skipped for this request.
+     *
+     * @var bool
+     */
+    protected $ssrfGuardEnabled = true;
+
+    /**
      * The middleware callables added by users that will handle requests.
      *
      * @var \Illuminate\Support\Collection
@@ -1054,6 +1068,13 @@ class PendingRequest
         }
 
         $url = $this->expandUrlParameters($url);
+
+        // Run the SSRF guard before the request goes anywhere — but skip it
+        // if the request will be intercepted by a stub/fake, since test
+        // URLs often point at internal addresses intentionally.
+        if (! ($this->stubCallbacks instanceof Collection) || $this->stubCallbacks->isEmpty()) {
+            $this->guardUrl($url);
+        }
 
         $options = $this->parseHttpOptions($options);
 
@@ -1947,6 +1968,106 @@ class PendingRequest
         }
 
         return array_any($this->allowedStrayRequestUrls, fn ($pattern) => Str::is($pattern, $url));
+    }
+
+    /**
+     * Set the SSRF guard used to validate outbound URLs.
+     *
+     * Pass `null` to disable guard resolution for this request.
+     *
+     * Cloning the guard isolates per-request mutations
+     * ({@see allowScheme()}, etc.) from the factory's shared instance.
+     *
+     * @param  \Illuminate\Http\Client\SsrfGuard|null  $guard
+     * @return $this
+     */
+    public function ssrfGuard(?SsrfGuard $guard): static
+    {
+        $this->ssrfGuard = $guard === null ? null : clone $guard;
+
+        return $this;
+    }
+
+    /**
+     * Disable the SSRF guard for this request, allowing requests to
+     * private/internal addresses.
+     *
+     * @return $this
+     */
+    public function withoutSsrfGuard(): static
+    {
+        $this->ssrfGuardEnabled = false;
+
+        return $this;
+    }
+
+    /**
+     * Add extra URL schemes that the SSRF guard should permit for this
+     * request. Additive — does not replace the globally-configured
+     * allowed schemes.
+     *
+     * @param  string  ...$schemes
+     * @return $this
+     */
+    public function allowScheme(string ...$schemes): static
+    {
+        $this->ensureSsrfGuard()->allowSchemes($schemes);
+
+        return $this;
+    }
+
+    /**
+     * Determine if the given URL is safe to send a request to, based on the
+     * SSRF guard.
+     *
+     * @param  string  $url
+     * @return bool
+     */
+    public function isSafeUrl($url): bool
+    {
+        if ($this->ssrfGuard === null) {
+            return true;
+        }
+
+        return $this->ssrfGuard->isSafe($url);
+    }
+
+    /**
+     * Lazily resolve an SsrfGuard, falling back to a permissive default if
+     * none has been configured on the request or factory.
+     *
+     * @return \Illuminate\Http\Client\SsrfGuard
+     */
+    protected function ensureSsrfGuard(): ?SsrfGuard
+    {
+        if ($this->ssrfGuard !== null) {
+            return $this->ssrfGuard;
+        }
+
+        return $this->ssrfGuard = new SsrfGuard([
+            'enabled' => true,
+            'allowed_schemes' => ['https', 'http'],
+            'allowed_ports' => [80, 443],
+            'blocked_ports' => [],
+        ]);
+    }
+
+    /**
+     * Run the SSRF guard against the given URL, throwing if the request
+     * would be unsafe.
+     *
+     * @param  string  $url
+     * @return void
+     *
+     * @throws \Illuminate\Http\Client\SsrfBlockedException
+     */
+    protected function guardUrl($url): void
+    {
+        if (! $this->ssrfGuardEnabled || $this->ssrfGuard === null) {
+            return;
+        }
+
+        $this->ssrfGuard->assertSafe($url);
     }
 
     /**
